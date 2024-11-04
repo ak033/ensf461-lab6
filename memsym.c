@@ -221,7 +221,6 @@ void load_immediate(int reg, int value) {
 }
 
 // Load value from memory into register
-// Load value from memory into register
 void load_address(int address, int reg) {
     if (reg < 0 || reg >= NUM_REGISTERS) {
         fprintf(output_file, "Current PID: %d. Error: invalid register operand r%d\n", simulator.current_pid, reg);
@@ -265,8 +264,6 @@ void load_address(int address, int reg) {
             simulator.current_pid, address, simulator.physical_memory[physical_address], reg);
 }
 
-
-// Store value from register into memory
 // Store value from register into memory
 void store_register(int address, int reg) {
     if (reg < 0 || reg >= NUM_REGISTERS) {
@@ -311,8 +308,6 @@ void store_register(int address, int reg) {
             simulator.current_pid, reg, simulator.registers[simulator.current_pid][reg], address);
 }
 
-
-// Store immediate value into memory
 // Store immediate value into memory
 void store_immediate(int address, int value) {
     // Calculate VPN and offset
@@ -352,6 +347,27 @@ void store_immediate(int address, int value) {
             simulator.current_pid, value, address);
 }
 
+// Inspect register function
+void rinspect(int reg) {
+    if (reg < 0 || reg >= NUM_REGISTERS) {
+        fprintf(output_file, "Current PID: %d. Error: invalid register operand r%d\n", simulator.current_pid, reg);
+        return;
+    }
+    uint32_t content = simulator.registers[simulator.current_pid][reg];
+    fprintf(output_file, "Current PID: %d. Inspected register r%d. Content: %u\n",
+            simulator.current_pid, reg, content);
+}
+
+// Inspect page table function
+void pinspect(int vpn) {
+    if (vpn < 0 || vpn >= (1 << simulator.vpn_bits)) {
+        fprintf(output_file, "Current PID: %d. Error: invalid virtual page number %d\n", simulator.current_pid, vpn);
+        return;
+    }
+    PageTableEntry entry = simulator.page_tables[simulator.current_pid]->entries[vpn];
+    fprintf(output_file, "Current PID: %d. Inspected page table entry %d. Physical frame number: %u. Valid: %d\n",
+            simulator.current_pid, vpn, entry.pfn, entry.valid);
+}
 
 // Add function (example implementation)
 void add_regs() {
@@ -564,7 +580,31 @@ int main(int argc, char* argv[]) {
                 fprintf(stderr, "Error: Invalid operand for store.\n");
                 exit(EXIT_FAILURE);
             }
-        } else {
+        } 
+        // Added handling for 'rinspect' command
+        else if (strcmp(tokens[0], "rinspect") == 0) {
+            if (tokens[1] == NULL) {
+                fprintf(stderr, "Error: Missing argument for rinspect.\n");
+                exit(EXIT_FAILURE);
+            }
+            // Assume register is in the form of r1, r2, etc.
+            if (tokens[1][0] != 'r') {
+                fprintf(stderr, "Error: Invalid register format for rinspect. Expected format rX.\n");
+                exit(EXIT_FAILURE);
+            }
+            int reg = atoi(tokens[1] + 1); // Skip the 'r' character
+            rinspect(reg);
+        }
+        // Added handling for 'pinspect' command
+        else if (strcmp(tokens[0], "pinspect") == 0) {
+            if (tokens[1] == NULL) {
+                fprintf(stderr, "Error: Missing argument for pinspect.\n");
+                exit(EXIT_FAILURE);
+            }
+            int vpn = atoi(tokens[1]);
+            pinspect(vpn);
+        }
+        else {
             // Handle any unknown command case if needed
             fprintf(output_file, "Current PID: %d. Unknown command: %s\n", simulator.current_pid, tokens[0]);
         }
