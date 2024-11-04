@@ -369,6 +369,40 @@ void pinspect(int vpn) {
             simulator.current_pid, vpn, entry.pfn, entry.valid);
 }
 
+// Inspect physical memory function
+void minspect(int address) {
+    // Calculate the size of physical memory
+    int physical_memory_size = 1 << (simulator.off + simulator.pfn_bits);
+    if (address < 0 || address >= physical_memory_size) {
+        fprintf(output_file, "Current PID: %d. Error: invalid physical memory address %d\n", simulator.current_pid, address);
+        return;
+    }
+    uint32_t value = simulator.physical_memory[address];
+    fprintf(output_file, "Current PID: %d. Inspected physical location %d. Value: %u\n",
+            simulator.current_pid, address, value);
+}
+// Inspect physical memory function
+// Inspect physical memory function
+void linspect(int address) {
+    // Calculate the size of physical memory
+    int physical_memory_size = 1 << (simulator.off + simulator.pfn_bits);
+    
+    // Validate the physical memory address
+    if (address < 0 || address >= physical_memory_size) {
+        fprintf(output_file, "Current PID: %d. Error: invalid physical memory address %d\n", simulator.current_pid, address);
+        return;
+    }
+    
+    // Retrieve the value from physical memory
+    uint32_t value = simulator.physical_memory[address];
+    
+    // Output the inspected value
+    fprintf(output_file, "Current PID: %d. Inspected physical location %d. Value: %u\n",
+            simulator.current_pid, address, value);
+}
+
+
+
 // Add function (example implementation)
 void add_regs() {
     // Perform addition: r1 = r1 + r2
@@ -604,6 +638,23 @@ int main(int argc, char* argv[]) {
             int vpn = atoi(tokens[1]);
             pinspect(vpn);
         }
+        // Added handling for 'minspect' command
+        else if (strcmp(tokens[0], "minspect") == 0) {
+            if (tokens[1] == NULL) {
+                fprintf(stderr, "Error: Missing argument for minspect.\n");
+                exit(EXIT_FAILURE);
+            }
+            int address = atoi(tokens[1]);
+            minspect(address);
+        }
+         else if (strcmp(tokens[0], "linspect") == 0) {
+        if (tokens[1] == NULL) {
+            fprintf(stderr, "Error: Missing argument for linspect.\n");
+            exit(EXIT_FAILURE);
+        }
+        int address = atoi(tokens[1]);
+        linspect(address);
+    }
         else {
             // Handle any unknown command case if needed
             fprintf(output_file, "Current PID: %d. Unknown command: %s\n", simulator.current_pid, tokens[0]);
