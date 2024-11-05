@@ -37,62 +37,92 @@ typedef struct {
 
 // Memory Simulator Structure
 typedef struct {
-    TLBEntry tlb[TLB_SIZE];                     // TLB entries
-    PageTable* page_tables[MAX_PROCESSES];      // Page tables for each process
-    uint32_t* physical_memory;                   // Physical memory
-    int define_called;                           // Flag to check if define has been called
-    int off, pfn_bits, vpn_bits;                 // Memory parameters
-    int current_pid;                             // Current Process ID
-    uint32_t registers[MAX_PROCESSES][NUM_REGISTERS]; // Registers for each process
+    TLBEntry tlb[TLB_SIZE];                             // TLB entries
+    PageTable* page_tables[MAX_PROCESSES];              // Page tables for each process
+    uint32_t* physical_memory;                           // Physical memory
+    int define_called;                                   // Flag to check if define has been called
+    int off, pfn_bits, vpn_bits;                         // Memory parameters
+    int current_pid;                                     // Current Process ID
+    uint32_t registers[MAX_PROCESSES][NUM_REGISTERS];    // Registers for each process
 } MemorySimulator;
+
+// Function prototypes
+char** tokenize_input(char* input);
+void add_to_tlb(uint32_t vpn, uint32_t pfn, int pid, int should_log, uint32_t current_timestamp);
+int lookup_tlb(uint32_t vpn, int pid, uint32_t* pfn, int* tlb_index, uint32_t current_timestamp);
+void define_memory(int off, int pfn_bits, int vpn_bits);
+void ctxswitch(int pid);
+void load_immediate(int reg, int value);
+void load_address(int address, int reg);
+void store_register(int address, int reg);
+void store_immediate(int address, int value);
+void rinspect(int reg);
+void pinspect(int vpn);
+void linspect(int address);
+void tinspect(int index);
+void add_regs();
+void map_vpn_pfn(int vpn, int pfn, uint32_t current_timestamp);
+void unmap_vpn(int vpn);
+void cleanup();
 
 // Global Variables
 MemorySimulator simulator;
 ReplacementStrategy replacement_strategy;
-uint32_t global_timestamp = 0;
+uint32_t global_timestamp = 1; // Initialize to 1
 
 // Output file
-FILE* output_file;
+FILE* output_file = NULL;
 
 // Function to tokenize input line
 char** tokenize_input(char* input) {
     char** tokens = NULL;
-    char* token = strtok(input, " ");
+    char* token = strtok(input, " \t\r\n"); // Split on space, tab, CR, LF
     int num_tokens = 0;
 
     while (token != NULL) {
         num_tokens++;
         tokens = realloc(tokens, num_tokens * sizeof(char*));
+        if (tokens == NULL) {
+            fprintf(stderr, "Error reallocating memory for tokens.\n");
+            exit(EXIT_FAILURE);
+        }
         tokens[num_tokens - 1] = malloc(strlen(token) + 1);
+        if (tokens[num_tokens - 1] == NULL) {
+            fprintf(stderr, "Error allocating memory for token.\n");
+            exit(EXIT_FAILURE);
+        }
         strcpy(tokens[num_tokens - 1], token);
-        token = strtok(NULL, " ");
+        token = strtok(NULL, " \t\r\n");
     }
 
     tokens = realloc(tokens, (num_tokens + 1) * sizeof(char*));
+    if (tokens == NULL) {
+        fprintf(stderr, "Error reallocating memory for tokens termination.\n");
+        exit(EXIT_FAILURE);
+    }
     tokens[num_tokens] = NULL; // Null-terminate the tokens
 
     return tokens;
 }
 
 // Function to add an entry to the TLB with replacement strategy
-void add_to_tlb(uint32_t vpn, uint32_t pfn, int pid, int should_log) {
-    int i;
+void add_to_tlb(uint32_t vpn, uint32_t pfn, int pid, int should_log, uint32_t current_timestamp) {
     // Check if VPN is already in TLB and update it
-    for (i = 0; i < TLB_SIZE; i++) {
+    for (int i = 0; i < TLB_SIZE; i++) {
         if (simulator.tlb[i].valid && simulator.tlb[i].pid == pid && simulator.tlb[i].vpn == vpn) {
             simulator.tlb[i].pfn = pfn;
-            simulator.tlb[i].timestamp = global_timestamp++;
+            simulator.tlb[i].timestamp = current_timestamp;
             return;
         }
     }
 
     // Look for an empty slot
-    for (i = 0; i < TLB_SIZE; i++) {
+    for (int i = 0; i < TLB_SIZE; i++) {
         if (!simulator.tlb[i].valid) {
             simulator.tlb[i].valid = TRUE;
             simulator.tlb[i].vpn = vpn;
             simulator.tlb[i].pfn = pfn;
-            simulator.tlb[i].timestamp = global_timestamp++;
+            simulator.tlb[i].timestamp = current_timestamp;
             simulator.tlb[i].pid = pid;
             if (should_log) {
                 fprintf(output_file, "Current PID: %d. Added VPN %u to TLB entry %d with PFN %u\n",
@@ -106,17 +136,10 @@ void add_to_tlb(uint32_t vpn, uint32_t pfn, int pid, int should_log) {
     int replace_index = 0;
     uint32_t selected_timestamp = simulator.tlb[0].timestamp;
 
-    for (i = 1; i < TLB_SIZE; i++) {
-        if (replacement_strategy == FIFO) {
-            if (simulator.tlb[i].timestamp < selected_timestamp) {
-                selected_timestamp = simulator.tlb[i].timestamp;
-                replace_index = i;
-            }
-        } else if (replacement_strategy == LRU) {
-            if (simulator.tlb[i].timestamp < selected_timestamp) {
-                selected_timestamp = simulator.tlb[i].timestamp;
-                replace_index = i;
-            }
+    for (int i = 1; i < TLB_SIZE; i++) {
+        if (simulator.tlb[i].timestamp < selected_timestamp) {
+            selected_timestamp = simulator.tlb[i].timestamp;
+            replace_index = i;
         }
     }
 
@@ -128,19 +151,19 @@ void add_to_tlb(uint32_t vpn, uint32_t pfn, int pid, int should_log) {
 
     simulator.tlb[replace_index].vpn = vpn;
     simulator.tlb[replace_index].pfn = pfn;
-    simulator.tlb[replace_index].timestamp = global_timestamp++;
+    simulator.tlb[replace_index].timestamp = current_timestamp;
     simulator.tlb[replace_index].pid = pid;
 }
 
 // Function to lookup TLB
-int lookup_tlb(uint32_t vpn, int pid, uint32_t* pfn, int* tlb_index) {
+int lookup_tlb(uint32_t vpn, int pid, uint32_t* pfn, int* tlb_index, uint32_t current_timestamp) {
     for (int i = 0; i < TLB_SIZE; i++) {
         if (simulator.tlb[i].valid && simulator.tlb[i].pid == pid && simulator.tlb[i].vpn == vpn) {
             *pfn = simulator.tlb[i].pfn;
             *tlb_index = i;
             // Update timestamp for LRU
             if (replacement_strategy == LRU) {
-                simulator.tlb[i].timestamp = global_timestamp++;
+                simulator.tlb[i].timestamp = current_timestamp;
             }
             return TRUE; // TLB Hit
         }
@@ -149,9 +172,9 @@ int lookup_tlb(uint32_t vpn, int pid, uint32_t* pfn, int* tlb_index) {
 }
 
 // Define function
-void define(int off, int pfn_bits, int vpn_bits) {
+void define_memory(int off, int pfn_bits, int vpn_bits) {
     if (simulator.physical_memory != NULL) {
-        fprintf(output_file, "Error: multiple calls to define in the same trace\n");
+        fprintf(output_file, "Current PID: %d. Error: multiple calls to define in the same trace\n", simulator.current_pid);
         exit(EXIT_FAILURE);
     }
     simulator.off = off;
@@ -221,7 +244,6 @@ void load_immediate(int reg, int value) {
 }
 
 // Load value from memory into register
-// Load value from memory into register
 void load_address(int address, int reg) {
     if (reg < 0 || reg >= NUM_REGISTERS) {
         fprintf(output_file, "Current PID: %d. Error: invalid register operand r%d\n", simulator.current_pid, reg);
@@ -234,7 +256,7 @@ void load_address(int address, int reg) {
 
     uint32_t pfn;
     int tlb_index;
-    int hit = lookup_tlb(vpn, simulator.current_pid, &pfn, &tlb_index);
+    int hit = lookup_tlb(vpn, simulator.current_pid, &pfn, &tlb_index, global_timestamp);
 
     if (hit) {
         // TLB Hit
@@ -250,7 +272,7 @@ void load_address(int address, int reg) {
             fprintf(output_file, "Current PID: %d. Translating. Successfully mapped VPN %u to PFN %u\n",
                     simulator.current_pid, vpn, pfn);
             // Add to TLB with logging
-            add_to_tlb(vpn, pfn, simulator.current_pid, TRUE);
+            add_to_tlb(vpn, pfn, simulator.current_pid, TRUE, global_timestamp);
         } else {
             fprintf(output_file, "Current PID: %d. Translating. Translation for VPN %u not found in page table\n",
                     simulator.current_pid, vpn);
@@ -265,8 +287,6 @@ void load_address(int address, int reg) {
             simulator.current_pid, address, simulator.physical_memory[physical_address], reg);
 }
 
-
-// Store value from register into memory
 // Store value from register into memory
 void store_register(int address, int reg) {
     if (reg < 0 || reg >= NUM_REGISTERS) {
@@ -280,7 +300,7 @@ void store_register(int address, int reg) {
 
     uint32_t pfn;
     int tlb_index;
-    int hit = lookup_tlb(vpn, simulator.current_pid, &pfn, &tlb_index);
+    int hit = lookup_tlb(vpn, simulator.current_pid, &pfn, &tlb_index, global_timestamp);
 
     if (hit) {
         // TLB Hit
@@ -296,7 +316,7 @@ void store_register(int address, int reg) {
             fprintf(output_file, "Current PID: %d. Translating. Successfully mapped VPN %u to PFN %u\n",
                     simulator.current_pid, vpn, pfn);
             // Add to TLB with logging
-            add_to_tlb(vpn, pfn, simulator.current_pid, TRUE);
+            add_to_tlb(vpn, pfn, simulator.current_pid, TRUE, global_timestamp);
         } else {
             fprintf(output_file, "Current PID: %d. Translating. Translation for VPN %u not found in page table\n",
                     simulator.current_pid, vpn);
@@ -307,12 +327,10 @@ void store_register(int address, int reg) {
     // Store the value in physical memory
     uint32_t physical_address = (pfn << simulator.off) | offset;
     simulator.physical_memory[physical_address] = simulator.registers[simulator.current_pid][reg];
-    fprintf(output_file, "Current PID: %d. Stored value of register r%d (%d) into location %u\n",
+    fprintf(output_file, "Current PID: %d. Stored value of register r%d (%u) into location %u\n",
             simulator.current_pid, reg, simulator.registers[simulator.current_pid][reg], address);
 }
 
-
-// Store immediate value into memory
 // Store immediate value into memory
 void store_immediate(int address, int value) {
     // Calculate VPN and offset
@@ -321,7 +339,7 @@ void store_immediate(int address, int value) {
 
     uint32_t pfn;
     int tlb_index;
-    int hit = lookup_tlb(vpn, simulator.current_pid, &pfn, &tlb_index);
+    int hit = lookup_tlb(vpn, simulator.current_pid, &pfn, &tlb_index, global_timestamp);
 
     if (hit) {
         // TLB Hit
@@ -337,7 +355,7 @@ void store_immediate(int address, int value) {
             fprintf(output_file, "Current PID: %d. Translating. Successfully mapped VPN %u to PFN %u\n",
                     simulator.current_pid, vpn, pfn);
             // Add to TLB with logging
-            add_to_tlb(vpn, pfn, simulator.current_pid, TRUE);
+            add_to_tlb(vpn, pfn, simulator.current_pid, TRUE, global_timestamp);
         } else {
             fprintf(output_file, "Current PID: %d. Translating. Translation for VPN %u not found in page table\n",
                     simulator.current_pid, vpn);
@@ -352,6 +370,58 @@ void store_immediate(int address, int value) {
             simulator.current_pid, value, address);
 }
 
+// Inspect register function
+void rinspect(int reg) {
+    if (reg < 0 || reg >= NUM_REGISTERS) {
+        fprintf(output_file, "Current PID: %d. Error: invalid register operand r%d\n", simulator.current_pid, reg);
+        return;
+    }
+    uint32_t content = simulator.registers[simulator.current_pid][reg];
+    fprintf(output_file, "Current PID: %d. Inspected register r%d. Content: %u\n",
+            simulator.current_pid, reg, content);
+}
+
+// Inspect page table function
+void pinspect(int vpn) {
+    if (vpn < 0 || vpn >= (1 << simulator.vpn_bits)) {
+        fprintf(output_file, "Current PID: %d. Error: invalid virtual page number %d\n", simulator.current_pid, vpn);
+        return;
+    }
+    PageTableEntry entry = simulator.page_tables[simulator.current_pid]->entries[vpn];
+    fprintf(output_file, "Current PID: %d. Inspected page table entry %d. Physical frame number: %u. Valid: %d\n",
+            simulator.current_pid, vpn, entry.pfn, entry.valid);
+}
+
+// Inspect physical memory function
+void linspect(int address) {
+    // Calculate the size of physical memory
+    int physical_memory_size = 1 << (simulator.off + simulator.pfn_bits);
+    
+    // Validate the physical memory address
+    if (address < 0 || address >= physical_memory_size) {
+        fprintf(output_file, "Current PID: %d. Error: invalid physical memory address %d\n", simulator.current_pid, address);
+        return;
+    }
+    
+    // Retrieve the value from physical memory
+    uint32_t value = simulator.physical_memory[address];
+    
+    // Output the inspected value
+    fprintf(output_file, "Current PID: %d. Inspected physical location %d. Value: %u\n",
+            simulator.current_pid, address, value);
+}
+
+// Inspect TLB entry function
+void tinspect(int index) {
+    if (index < 0 || index >= TLB_SIZE) {
+        fprintf(output_file, "Current PID: %d. Error: invalid TLB entry index %d\n", simulator.current_pid, index);
+        return;
+    }
+
+    TLBEntry entry = simulator.tlb[index];
+    fprintf(output_file, "Current PID: %d. Inspected TLB entry %d. VPN: %u. PFN: %u. Valid: %d. PID: %d. Timestamp: %u\n",
+            simulator.current_pid, index, entry.vpn, entry.pfn, entry.valid, entry.pid, entry.timestamp);
+}
 
 // Add function (example implementation)
 void add_regs() {
@@ -368,7 +438,7 @@ void add_regs() {
 }
 
 // Map function
-void map_vpn_pfn(int vpn, int pfn) {
+void map_vpn_pfn(int vpn, int pfn, uint32_t current_timestamp) {
     if (vpn < 0 || vpn >= (1 << simulator.vpn_bits)) {
         fprintf(output_file, "Current PID: %d. Error: invalid virtual page number %d\n", simulator.current_pid, vpn);
         return;
@@ -385,7 +455,7 @@ void map_vpn_pfn(int vpn, int pfn) {
             simulator.current_pid, vpn, pfn);
     
     // Add the mapping to the TLB without logging (should_log = FALSE)
-    add_to_tlb(vpn, pfn, simulator.current_pid, FALSE);
+    add_to_tlb(vpn, pfn, simulator.current_pid, FALSE, current_timestamp);
 }
 
 // Unmap function
@@ -411,7 +481,7 @@ void unmap_vpn(int vpn) {
         if (simulator.tlb[i].valid && simulator.tlb[i].pid == simulator.current_pid && simulator.tlb[i].vpn == vpn) {
             simulator.tlb[i].valid = FALSE;
             simulator.tlb[i].pid = -1;
-            // Do not log invalidated TLB entries to pass Test 3.2
+            // Do not log invalidated TLB entries to pass Test 4.4
             break; // Assuming only one TLB entry per VPN
         }
     }
@@ -426,14 +496,15 @@ void cleanup() {
     free(simulator.physical_memory);
 }
 
-// Main function
 int main(int argc, char* argv[]) {
+    // Initialize simulator
     simulator.current_pid = 0; 
+    simulator.define_called = FALSE;
+
     const char usage[] = "Usage: memsym.out <strategy> <input trace> <output trace>\n";
     char* input_trace;
     char* output_trace;
     char buffer[1024];
-    simulator.define_called = FALSE;
 
     // Parse command line arguments
     if (argc != 4) {
@@ -477,15 +548,30 @@ int main(int argc, char* argv[]) {
     }
     rewind(input_file); 
 
+    // Process each line in the input file
     while (fgets(buffer, sizeof(buffer), input_file)) {
-        // Remove endline character
-        buffer[strcspn(buffer, "\n")] = '\0'; // This is safer
+        // Remove endline characters
+        buffer[strcspn(buffer, "\n")] = '\0'; // Remove '\n'
+        buffer[strcspn(buffer, "\r")] = '\0'; // Remove '\r' if present
+
         if (buffer[0] == '%') {
             continue; // Ignore comments
         }
+
         char** tokens = tokenize_input(buffer);
 
-        // Implement memory simulator commands
+        if (tokens[0] == NULL) {
+            // Empty or whitespace-only line
+            for (int i = 0; tokens[i] != NULL; i++) {
+                free(tokens[i]);
+            }
+            free(tokens);
+            continue;
+        }
+
+        // Implement memory simulator commands with current_timestamp
+        uint32_t current_timestamp = global_timestamp;
+
         if (strcmp(tokens[0], "define") == 0) {
             if (simulator.define_called) {
                 fprintf(output_file, "Current PID: %d. Error: multiple calls to define in the same trace\n", simulator.current_pid);
@@ -500,19 +586,22 @@ int main(int argc, char* argv[]) {
             int off = atoi(tokens[1]);
             int pfn_bits = atoi(tokens[2]);
             int vpn_bits = atoi(tokens[3]);
-            define(off, pfn_bits, vpn_bits);
+            define_memory(off, pfn_bits, vpn_bits);
             simulator.define_called = TRUE;
-        } else if (!simulator.define_called) {
+        } 
+        else if (!simulator.define_called) {
             fprintf(output_file, "Current PID: %d. Error: attempt to execute instruction before define\n", simulator.current_pid);
             exit(EXIT_FAILURE);
-        } else if (strcmp(tokens[0], "ctxswitch") == 0) {
+        } 
+        else if (strcmp(tokens[0], "ctxswitch") == 0) {
             if (tokens[1] == NULL) {
                 fprintf(stderr, "Error: Missing argument for ctxswitch.\n");
                 exit(EXIT_FAILURE);
             }
             int new_pid = atoi(tokens[1]);
             ctxswitch(new_pid);
-        } else if (strcmp(tokens[0], "load") == 0) {
+        } 
+        else if (strcmp(tokens[0], "load") == 0) {
             if (tokens[1] == NULL || tokens[2] == NULL) {
                 fprintf(stderr, "Error: Missing arguments for load.\n");
                 exit(EXIT_FAILURE);
@@ -520,33 +609,45 @@ int main(int argc, char* argv[]) {
             // Determine if it's load immediate or load from address
             if (tokens[2][0] == '#') {
                 // Load immediate
+                if (strlen(tokens[1]) < 2 || tokens[1][0] != 'r') {
+                    fprintf(stderr, "Error: Invalid register format for load immediate. Expected format rX.\n");
+                    exit(EXIT_FAILURE);
+                }
                 int reg = atoi(tokens[1] + 1); // Assume reg is in the form of r1, r2...
                 int value = atoi(tokens[2] + 1); // Skip the '#' in '#value'
                 load_immediate(reg, value);
             } else {
                 // Load from address
+                if (strlen(tokens[1]) < 2 || tokens[1][0] != 'r') {
+                    fprintf(stderr, "Error: Invalid register format for load from address. Expected format rX.\n");
+                    exit(EXIT_FAILURE);
+                }
                 int reg = atoi(tokens[1] + 1); // Assume reg is in the form of r1, r2...
                 int address = atoi(tokens[2]);
                 load_address(address, reg);
             }
-        } else if (strcmp(tokens[0], "add") == 0) {
+        } 
+        else if (strcmp(tokens[0], "add") == 0) {
             add_regs();
-        } else if (strcmp(tokens[0], "map") == 0) {
+        } 
+        else if (strcmp(tokens[0], "map") == 0) {
             if (tokens[1] == NULL || tokens[2] == NULL) {
                 fprintf(stderr, "Error: Missing arguments for map.\n");
                 exit(EXIT_FAILURE);
             }
             int vpn = atoi(tokens[1]);
             int pfn = atoi(tokens[2]);
-            map_vpn_pfn(vpn, pfn);
-        } else if (strcmp(tokens[0], "unmap") == 0) {
+            map_vpn_pfn(vpn, pfn, current_timestamp);
+        } 
+        else if (strcmp(tokens[0], "unmap") == 0) {
             if (tokens[1] == NULL) {
                 fprintf(stderr, "Error: Missing argument for unmap.\n");
                 exit(EXIT_FAILURE);
             }
             int vpn = atoi(tokens[1]);
             unmap_vpn(vpn);
-        } else if (strcmp(tokens[0], "store") == 0) {
+        } 
+        else if (strcmp(tokens[0], "store") == 0) {
             if (tokens[1] == NULL || tokens[2] == NULL) {
                 fprintf(stderr, "Error: Missing arguments for store.\n");
                 exit(EXIT_FAILURE);
@@ -556,16 +657,64 @@ int main(int argc, char* argv[]) {
                 // Store immediate value
                 int value = atoi(tokens[2] + 1); // Skip the '#' in '#value'
                 store_immediate(address, value);
-            } else if (tokens[2][0] == 'r') {
+            } 
+            else if (tokens[2][0] == 'r') {
                 // Store from register
+                if (strlen(tokens[2]) < 2) {
+                    fprintf(stderr, "Error: Invalid register format for store from register. Expected format rX.\n");
+                    exit(EXIT_FAILURE);
+                }
                 int reg = atoi(tokens[2] + 1); // Assume reg is in the form of r1, r2...
                 store_register(address, reg);
-            } else {
+            } 
+            else {
                 fprintf(stderr, "Error: Invalid operand for store.\n");
                 exit(EXIT_FAILURE);
             }
-        } else {
-            // Handle any unknown command case if needed
+        } 
+        // Handle 'rinspect' command
+        else if (strcmp(tokens[0], "rinspect") == 0) {
+            if (tokens[1] == NULL) {
+                fprintf(stderr, "Error: Missing argument for rinspect.\n");
+                exit(EXIT_FAILURE);
+            }
+            // Assume register is in the form of r1, r2, etc.
+            if (strlen(tokens[1]) < 2 || tokens[1][0] != 'r') {
+                fprintf(stderr, "Error: Invalid register format for rinspect. Expected format rX.\n");
+                exit(EXIT_FAILURE);
+            }
+            int reg = atoi(tokens[1] + 1); // Skip the 'r' character
+            rinspect(reg);
+        } 
+        // Handle 'pinspect' command
+        else if (strcmp(tokens[0], "pinspect") == 0) {
+            if (tokens[1] == NULL) {
+                fprintf(stderr, "Error: Missing argument for pinspect.\n");
+                exit(EXIT_FAILURE);
+            }
+            int vpn = atoi(tokens[1]);
+            pinspect(vpn);
+        } 
+        // Handle 'linspect' command
+        else if (strcmp(tokens[0], "linspect") == 0) {
+            if (tokens[1] == NULL) {
+                fprintf(stderr, "Error: Missing argument for linspect.\n");
+                exit(EXIT_FAILURE);
+            }
+            int address = atoi(tokens[1]);
+            linspect(address);
+        }
+        // Handle 'tinspect' command
+        else if (strcmp(tokens[0], "tinspect") == 0) {
+            if (tokens[1] == NULL) {
+                fprintf(stderr, "Error: Missing argument for tinspect.\n");
+                exit(EXIT_FAILURE);
+            }
+            int index = atoi(tokens[1]);
+            tinspect(index);
+        }
+        // Handle any unknown command
+        else {
             fprintf(output_file, "Current PID: %d. Unknown command: %s\n", simulator.current_pid, tokens[0]);
         }
 
@@ -574,6 +723,9 @@ int main(int argc, char* argv[]) {
             free(tokens[i]);
         }
         free(tokens);
+
+        // Increment global_timestamp after processing the command
+        global_timestamp++;
     }
 
     // Clean up
