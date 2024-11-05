@@ -444,10 +444,14 @@ void map_vpn_pfn(int vpn, int pfn, uint32_t current_timestamp) {
         return;
     }
     
+    // Remove the warning about remapping an already mapped VPN
+    /*
     if (simulator.page_tables[simulator.current_pid]->entries[vpn].valid) {
         fprintf(output_file, "Current PID: %d. Warning: VPN %d is already mapped\n", simulator.current_pid, vpn);
     }
+    */
     
+    // Update the page table entry
     simulator.page_tables[simulator.current_pid]->entries[vpn].valid = TRUE;
     simulator.page_tables[simulator.current_pid]->entries[vpn].pfn = pfn;
 
